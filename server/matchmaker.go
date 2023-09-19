@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/blugelabs/bluge"
-	"github.com/gofrs/uuid"
+	"github.com/gofrs/uuid/v5"
 	jwt "github.com/golang-jwt/jwt/v4"
 	"github.com/heroiclabs/nakama-common/rtapi"
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -283,7 +283,7 @@ func (m *LocalMatchmaker) Process() {
 	startTime := time.Now()
 	var activeIndexCount, indexCount int
 	defer func() {
-		m.metrics.Matchmaker(float64(indexCount), float64(activeIndexCount), time.Now().Sub(startTime))
+		m.metrics.Matchmaker(float64(indexCount), float64(activeIndexCount), time.Since(startTime))
 	}()
 
 	m.Lock()

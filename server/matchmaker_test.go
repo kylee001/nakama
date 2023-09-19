@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/blugelabs/bluge"
-	"github.com/gofrs/uuid"
+	"github.com/gofrs/uuid/v5"
 	"github.com/heroiclabs/nakama-common/rtapi"
 	"github.com/heroiclabs/nakama-common/runtime"
 	"github.com/stretchr/testify/assert"
@@ -1655,9 +1655,7 @@ func createTestMatchmaker(t fatalable, logger *zap.Logger, tickerActive bool, me
 		t.Fatalf("error creating test match registry: %v", err)
 	}
 
-	runtime, _, err := NewRuntime(context.Background(), logger, logger, nil, jsonpbMarshaler, jsonpbUnmarshaler, cfg, "",
-		nil, nil, nil, nil, sessionRegistry, nil, nil,
-		nil, tracker, metrics, nil, messageRouter)
+	runtime, _, err := NewRuntime(context.Background(), logger, logger, nil, jsonpbMarshaler, jsonpbUnmarshaler, cfg, "", nil, nil, nil, nil, sessionRegistry, nil, nil, nil, tracker, metrics, nil, messageRouter, storageIdx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2432,6 +2430,8 @@ func benchmarkMatchmakerProcessTickets(ticketsMax int32, unmatchable int, minCou
 		processedTicketsCount.Store(0)
 		ctx, cancel = context.WithCancel(context.Background())
 	}
+
+	cancel()
 }
 
 func BenchmarkMatchmakerProcessTickets100_min2_max2(b *testing.B) {

@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofrs/uuid"
+	"github.com/gofrs/uuid/v5"
 	"github.com/heroiclabs/nakama-common/api"
 	"github.com/heroiclabs/nakama/v3/iap"
 	"github.com/jackc/pgconn"
@@ -258,7 +258,7 @@ func ValidateSubscriptionApple(ctx context.Context, logger *zap.Logger, db *sql.
 	}
 
 	if validation.Status != iap.AppleReceiptIsValid {
-		if validation.IsRetryable == true {
+		if validation.IsRetryable {
 			return nil, status.Error(codes.Unavailable, "Apple IAP verification is currently unavailable. Try again later.")
 		}
 		return nil, status.Error(codes.FailedPrecondition, fmt.Sprintf("Invalid Receipt. Status: %d", validation.Status))
@@ -395,13 +395,8 @@ func ValidateSubscriptionGoogle(ctx context.Context, logger *zap.Logger, db *sql
 		storageSub.originalTransactionId = gResponse.LinkedPurchaseToken
 	}
 
-	suid := storageSub.userID.String()
-	if storageSub.userID.IsNil() {
-		suid = ""
-	}
-
 	validatedSub := &api.ValidatedSubscription{
-		UserId:                suid,
+		UserId:                userID.String(),
 		ProductId:             storageSub.productId,
 		OriginalTransactionId: storageSub.originalTransactionId,
 		Store:                 storageSub.store,
@@ -421,6 +416,12 @@ func ValidateSubscriptionGoogle(ctx context.Context, logger *zap.Logger, db *sql
 		return nil, err
 	}
 
+	suid := storageSub.userID.String()
+	if storageSub.userID.IsNil() {
+		suid = ""
+	}
+
+	validatedSub.UserId = suid
 	validatedSub.CreateTime = timestamppb.New(storageSub.createTime)
 	validatedSub.UpdateTime = timestamppb.New(storageSub.updateTime)
 	validatedSub.ProviderResponse = storageSub.rawResponse
@@ -684,6 +685,7 @@ type appleNotificationTransactionInfo struct {
 	PurchaseDateMs         int64  `json:"purchaseDate"`
 }
 
+//nolint:unused
 func extractApplePublicKeyFromToken(tokenStr string) (*ecdsa.PublicKey, error) {
 	tokenArr := strings.Split(tokenStr, ".")
 	headerByte, err := base64.RawStdEncoding.DecodeString(tokenArr[0])
@@ -1020,7 +1022,6 @@ func appleNotificationHandler(logger *zap.Logger, db *sql.DB, purchaseNotificati
 		}
 
 		w.WriteHeader(http.StatusOK)
-		return
 	}
 }
 
@@ -1116,7 +1117,7 @@ func googleNotificationHandler(logger *zap.Logger, db *sql.DB, config *IAPGoogle
 
 		logger.Debug("Google IAP subscription notification received", zap.String("notification_payload", string(jsonData)), zap.Any("api_response", gResponse))
 
-		uid := uuid.Nil
+		var uid uuid.UUID
 		if gResponse.ObfuscatedExternalAccountId != "" {
 			extUID, err := uuid.FromString(gResponse.ObfuscatedExternalAccountId)
 			if err != nil {
@@ -1134,7 +1135,7 @@ func googleNotificationHandler(logger *zap.Logger, db *sql.DB, config *IAPGoogle
 		} else if gResponse.ProfileId != "" {
 			var dbUID uuid.UUID
 			if err = db.QueryRowContext(context.Background(), "SELECT id FROM users WHERE google_id = $1", gResponse.ProfileId).Scan(&dbUID); err != nil {
-				if err == sql.ErrNoRows {
+				if errors.Is(err, sql.ErrNoRows) {
 					logger.Warn("Google Play Billing subscription notification user not found", zap.String("profile_id", gResponse.ProfileId), zap.String("payload", string(body)))
 					w.WriteHeader(http.StatusOK) // Subscription could not be assigned to a user ID, ack and ignore it.
 					return
@@ -1147,7 +1148,7 @@ func googleNotificationHandler(logger *zap.Logger, db *sql.DB, config *IAPGoogle
 			// Get user id by existing validated subscription.
 			sub, err := getSubscriptionByOriginalTransactionId(context.Background(), db, googleNotification.SubscriptionNotification.PurchaseToken)
 			if err != nil {
-				if err != sql.ErrNoRows {
+				if !errors.Is(err, sql.ErrNoRows) {
 					logger.Error("Failed to get subscription by original transaction id", zap.Error(err))
 				}
 				w.WriteHeader(http.StatusInternalServerError)
@@ -1205,6 +1206,5 @@ func googleNotificationHandler(logger *zap.Logger, db *sql.DB, config *IAPGoogle
 		}
 
 		w.WriteHeader(http.StatusOK)
-		return
 	}
 }
