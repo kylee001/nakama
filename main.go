@@ -39,6 +39,8 @@ import (
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/encoding/protojson"
 
+	_ "github.com/bits-and-blooms/bitset"
+	_ "github.com/go-gorp/gorp/v3"
 	_ "github.com/golang/snappy"
 	_ "github.com/prometheus/client_golang/prometheus"
 	_ "github.com/twmb/murmur3"
@@ -94,6 +96,13 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "healthcheck":
+			resp, err := http.Get("http://localhost:7350")
+			if err != nil || resp.StatusCode != http.StatusOK {
+				tmpLogger.Fatal("healthcheck failed")
+			}
+			tmpLogger.Info("healthcheck ok")
+			return
 		}
 	}
 
@@ -132,10 +141,10 @@ func main() {
 	cookie := newOrLoadCookie(config)
 	metrics := server.NewLocalMetrics(logger, startupLogger, db, config)
 	sessionRegistry := server.NewLocalSessionRegistry(metrics)
-	sessionCache := server.NewLocalSessionCache(config.GetSession().TokenExpirySec)
-	consoleSessionCache := server.NewLocalSessionCache(config.GetConsole().TokenExpirySec)
+	sessionCache := server.NewLocalSessionCache(config.GetSession().TokenExpirySec, config.GetSession().RefreshTokenExpirySec)
+	consoleSessionCache := server.NewLocalSessionCache(config.GetConsole().TokenExpirySec, 0)
 	loginAttemptCache := server.NewLocalLoginAttemptCache()
-	statusRegistry := server.NewStatusRegistry(logger, config, sessionRegistry, jsonpbMarshaler)
+	statusRegistry := server.NewLocalStatusRegistry(logger, config, sessionRegistry, jsonpbMarshaler)
 	tracker := server.StartLocalTracker(logger, config, sessionRegistry, statusRegistry, metrics, jsonpbMarshaler)
 	router := server.NewLocalMessageRouter(sessionRegistry, tracker, jsonpbMarshaler)
 	leaderboardCache := server.NewLocalLeaderboardCache(ctx, logger, startupLogger, db)
@@ -146,12 +155,13 @@ func main() {
 	tracker.SetMatchJoinListener(matchRegistry.Join)
 	tracker.SetMatchLeaveListener(matchRegistry.Leave)
 	streamManager := server.NewLocalStreamManager(config, sessionRegistry, tracker)
+	fmCallbackHandler := server.NewLocalFmCallbackHandler(config)
 
-	storageIndex, err := server.NewLocalStorageIndex(logger, db)
+	storageIndex, err := server.NewLocalStorageIndex(logger, db, config.GetStorage(), metrics)
 	if err != nil {
 		logger.Fatal("Failed to initialize storage index", zap.Error(err))
 	}
-	runtime, runtimeInfo, err := server.NewRuntime(ctx, logger, startupLogger, db, jsonpbMarshaler, jsonpbUnmarshaler, config, version, socialClient, leaderboardCache, leaderboardRankCache, leaderboardScheduler, sessionRegistry, sessionCache, statusRegistry, matchRegistry, tracker, metrics, streamManager, router, storageIndex)
+	runtime, runtimeInfo, err := server.NewRuntime(ctx, logger, startupLogger, db, jsonpbMarshaler, jsonpbUnmarshaler, config, version, socialClient, leaderboardCache, leaderboardRankCache, leaderboardScheduler, sessionRegistry, sessionCache, statusRegistry, matchRegistry, tracker, metrics, streamManager, router, storageIndex, fmCallbackHandler)
 	if err != nil {
 		startupLogger.Fatal("Failed initializing runtime modules", zap.Error(err))
 	}
@@ -281,7 +291,7 @@ func newOrLoadCookie(config server.Config) string {
 	cookie := uuid.FromBytesOrNil(b)
 	if err != nil || cookie == uuid.Nil {
 		cookie = uuid.Must(uuid.NewV4())
-		_ = os.WriteFile(filePath, cookie.Bytes(), 0644)
+		_ = os.WriteFile(filePath, cookie.Bytes(), 0o644)
 	}
 	return cookie.String()
 }

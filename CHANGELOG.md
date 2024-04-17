@@ -4,11 +4,116 @@ All notable changes to this project are documented below.
 The format is based on [keep a changelog](http://keepachangelog.com) and this project uses [semantic versioning](http://semver.org).
 
 ## [Unreleased]
+### Fixed
+- Ensure Apple receipts with duplicate transaction identifiers are processed cleanly.
+
+## [3.21.1] - 2024-03-22
+### Added
+- Add ability to easily run unit and integration tests in an isolated docker-compose environment.
+
 ### Changed
+- More efficient initial loading of storage index contents.
+
+### Fixed
+- Fix issue with Fleet Manager access causing an unexpected error.
+
+## [3.21.0] - 2024-03-17
+### Added
+- Add Fleet Manager API to power session-based multiplayer integrations. See [the documentation](https://heroiclabs.com/docs/nakama/concepts/multiplayer/session-based/) for more details.
+- Add CRON next and previous functions to Go runtime.
+- Add CRON previous function to Lua runtime.
+- Add CRON previous function to TypeScript/JavaScript runtime.
+- Add support for storage deletes in runtime multi-update functions.
+
+### Changed
+- Reduce number of memory allocations in leaderboard cache.
+- Fix leaderboard rank cache inconsistencies/race that could arise under heavy load.
+- List leaderboard records can now return up to 1,000 records per request.
+- Simplify query planning for storage object read operations.
+- Improve comparison operation for leaderboard rank cache ordering.
+- Extend extraction of purchase data from Apple IAP receipts.
+
+### Fixed
+- Prevent players from requesting duplicate joins to the same party.
+- Prevent players from requesting joins to parties they are already members of.
+- Ensure runtime user deletion function rejects the system user.
+
+## [3.20.1] - 2024-02-03
+### Changed
+- Improve handling of messages being sent while session is closing.
+- Build with Go 1.21.6.
+
+### Fixed
+- Skip Google refund handling for deleted users.
+- Fix storage engine version check regression.
+- Fix JavaScript runtime tournament records list owner identifier parameter handling.
+- Fix regression in tournament end active time calculation when it coincides with reset schedule.
+- Better handling of concurrent wallet update operations for the same user.
+
+## [3.20.0] - 2023-12-15
+### Changed
+- JavaScript runtime `localcachePut` now only accepts primitive types, other values will throw an error.
+- Storage search index list max limit increased from 100 to 10,000 results.
+- Upgrade GRPC-Gateway, Tally, Zap, crypto, oauth2, GRPC, and related dependencies.
+- Build with Go 1.21.5.
+
+### Fixed
+- Fix pointer slices assertions in JavaScript runtime Nakama module function arguments.
+- Fix caller ID parameter index in Lua runtime `storage_list` function.
+- Fix incorrect GOARCH flag in Dockerfiles for arm64.
+
+## [3.19.0] - 2023-11-11
+### Added
+- Add IAP purchase validation support for Facebook Instant Games.
+- Add Lua runtime function to clear all localcache data.
+- Add JavaScript runtime function to clear all localcache data.
+- Add support for per-key TTL in Lua runtime localcache.
+- Add support for per-key TTL in JavaScript runtime localcache.
+- Add support for optional client IP address passthrough to runtime Satori client.
+
+### Changed
+- Remove unused config 'matchmaker.batch_pool_size'.
+- RPC now allows omitting the `unwrap` parameter for requests with empty payloads.
+- Upgrade GRPC dependency.
+- Writing tournament scores now updates number of scores even if submitted score is not an improvement.
+- Move internal queries with variable number of args to a fixed number of args syntax.
+- Better handling of `num_score` and `max_num_score` in tournament score updates.
+- Remove unnecessary `curl`, `git`, `unzip`, `rsync`, and `schroot` tools from Docker images.
+- Build with Go 1.21.4 and use Debian bookworm-slim for base docker images.
+
+### Fixed
+- Correctly handle empty email field when authenticating via Apple Sign In.
+- Fix issue where rank cache may store duplicate ranks for some score inputs.
+- Fix issue related to accepting party members.
+- Fix HTTP request timeout usage in JavaScript runtime.
+
+## [3.18.0] - 2023-10-24
+### Added
+- Allow HTTP key to be read from an HTTP request's Basic auth header if present.
+- Add prefix search for storage keys in console (`key%`).
+- Runtime functions to build a leaderboardList cursor to start listing from a given rank.
+- Improved support for TypeScript/JavaScript runtime profiling.
+
+### Changed
+- Session cache model switched from whitelist to blacklist for improved usability.
 - Use Steam partner API instead of public API for Steam profiles and friends requests.
+- Add create_time and update_time to returned storage engine writes acks.
+- Add storage index create flag to read only from the index.
+- Add caller ID param to storage listing and storage index listing runtime APIs.
+- Update Facebook Graph API usage from v11 to v18.
+- Add support for refresh token rotation.
+- Allow JS runtime storage write operation version inputs to be undefined.
+- Build with Go 1.21.3.
 
 ### Fixed
 - Fixed multiple issues found by linter.
+- Fix storage index listing results sometimes being returned with incorrect order.
+- Fixes calculation of leaderboard and tournament times for rare types of CRON expressions that don't execute at a fixed interval.
+- Improved how start and end times are calculated for tournaments occurring in the future.
+- Fix users receiving friend request notifications when added by users who have blocked them.
+- Fix Go runtime registration of matchmaker custom override hook function.
+- Fully remove corresponding matchmaker tickets after custom matchmaker process completes.
+- Fix incorrectly documented default value for matchmaker flag.
 
 ### [3.17.1] - 2023-08-23
 ### Added

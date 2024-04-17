@@ -19,6 +19,7 @@ import {ApiStorageObject, ConsoleService, UserRole, WriteStorageObjectRequest} f
 import {Observable} from 'rxjs';
 import {UntypedFormBuilder, UntypedFormGroup, Validators} from '@angular/forms';
 import {AuthenticationService} from '../authentication.service';
+import {DeleteConfirmService} from '../shared/delete-confirm.service';
 
 @Component({
   templateUrl: './storage-object.component.html',
@@ -39,8 +40,8 @@ export class StorageObjectComponent implements OnInit, AfterViewInit {
       collection: ['', Validators.required],
       keyname: ['', Validators.required],
       user_id: ['', Validators.required],
-      permission_read: [0, Validators.required],
-      permission_write: [0, Validators.required]
+      permission_read: [{value: 0, disabled: false}, Validators.required],
+      permission_write: [{value: 0, disabled: false}, Validators.required]
     });
 
     this.route.data.subscribe(
@@ -67,6 +68,7 @@ export class StorageObjectComponent implements OnInit, AfterViewInit {
     private readonly consoleService: ConsoleService,
     private readonly authService: AuthenticationService,
     private readonly formBuilder: UntypedFormBuilder,
+    private readonly deleteConfirmService: DeleteConfirmService,
   ) {}
 
   ngAfterViewInit(): void {
@@ -75,7 +77,7 @@ export class StorageObjectComponent implements OnInit, AfterViewInit {
       props: {
         mode: Mode.text,
         readOnly: !this.updateAllowed(),
-        content:{text:this.object.value},
+        content: {text: this.object.value},
       },
     });
   }
@@ -158,6 +160,7 @@ export class StorageObjectComponent implements OnInit, AfterViewInit {
   }
 
   get f(): any {
+    // console.log(this.objectForm.controls);
     return this.objectForm.controls;
   }
 }

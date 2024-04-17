@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
@@ -68,9 +67,13 @@ func ValidatePurchasesApple(ctx context.Context, logger *zap.Logger, db *sql.DB,
 		env = api.StoreEnvironment_SANDBOX
 	}
 
-	storagePurchases := make([]*storagePurchase, 0, len(validation.Receipt.InApp))
+	seenTransactionIDs := make(map[string]struct{}, len(validation.Receipt.InApp)+len(validation.LatestReceiptInfo))
+	storagePurchases := make([]*storagePurchase, 0, len(validation.Receipt.InApp)+len(validation.LatestReceiptInfo))
 	for _, purchase := range validation.Receipt.InApp {
 		if purchase.ExpiresDateMs != "" {
+			continue
+		}
+		if _, seen := seenTransactionIDs[purchase.TransactionId]; seen {
 			continue
 		}
 
@@ -79,6 +82,7 @@ func ValidatePurchasesApple(ctx context.Context, logger *zap.Logger, db *sql.DB,
 			return nil, err
 		}
 
+		seenTransactionIDs[purchase.TransactionId] = struct{}{}
 		storagePurchases = append(storagePurchases, &storagePurchase{
 			userID:        userID,
 			store:         api.StoreProvider_APPLE_APP_STORE,
@@ -89,8 +93,34 @@ func ValidatePurchasesApple(ctx context.Context, logger *zap.Logger, db *sql.DB,
 			environment:   env,
 		})
 	}
+	// latest_receipt_info can also contaion purchases.
+	// https://developer.apple.com/forums/thread/63092
+	for _, purchase := range validation.LatestReceiptInfo {
+		if purchase.ExpiresDateMs != "" {
+			continue
+		}
+		if _, seen := seenTransactionIDs[purchase.TransactionId]; seen {
+			continue
+		}
 
-	if len(storagePurchases) == 0 && len(validation.Receipt.InApp) > 0 {
+		purchaseTime, err := strconv.ParseInt(purchase.PurchaseDateMs, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+
+		seenTransactionIDs[purchase.TransactionId] = struct{}{}
+		storagePurchases = append(storagePurchases, &storagePurchase{
+			userID:        userID,
+			store:         api.StoreProvider_APPLE_APP_STORE,
+			productId:     purchase.ProductId,
+			transactionId: purchase.TransactionId,
+			rawResponse:   string(raw),
+			purchaseTime:  parseMillisecondUnixTimestamp(purchaseTime),
+			environment:   env,
+		})
+	}
+
+	if len(storagePurchases) == 0 && len(validation.Receipt.InApp)+len(validation.LatestReceiptInfo) > 0 {
 		// All purchases in this receipt are subscriptions.
 		return nil, status.Error(codes.FailedPrecondition, "Subscription Receipt. Use the appropriate function instead.")
 	}
@@ -294,6 +324,74 @@ func ValidatePurchaseHuawei(ctx context.Context, logger *zap.Logger, db *sql.DB,
 			CreateTime:       timestamppb.New(p.createTime),
 			UpdateTime:       timestamppb.New(p.updateTime),
 			ProviderResponse: string(raw),
+			SeenBefore:       p.seenBefore,
+			Environment:      p.environment,
+		})
+	}
+
+	return &api.ValidatePurchaseResponse{
+		ValidatedPurchases: validatedPurchases,
+	}, nil
+}
+
+func ValidatePurchaseFacebookInstant(ctx context.Context, logger *zap.Logger, db *sql.DB, userID uuid.UUID, config *IAPFacebookInstantConfig, signedRequest string, persist bool) (*api.ValidatePurchaseResponse, error) {
+	payment, rawResponse, err := iap.ValidateReceiptFacebookInstant(config.AppSecret, signedRequest)
+	if err != nil {
+		if err != context.Canceled {
+			logger.Error("Error validating Facebook Instant receipt", zap.Error(err))
+		}
+		return nil, err
+	}
+
+	sPurchase := &storagePurchase{
+		userID:        userID,
+		store:         api.StoreProvider_FACEBOOK_INSTANT_STORE,
+		productId:     payment.ProductId,
+		transactionId: payment.PurchaseToken,
+		rawResponse:   rawResponse,
+		purchaseTime:  time.Unix(int64(payment.PurchaseTime), 0),
+		environment:   api.StoreEnvironment_PRODUCTION,
+	}
+
+	if !persist {
+		validatedPurchases := []*api.ValidatedPurchase{
+			{
+				UserId:           userID.String(),
+				ProductId:        sPurchase.productId,
+				TransactionId:    sPurchase.transactionId,
+				Store:            sPurchase.store,
+				PurchaseTime:     timestamppb.New(sPurchase.purchaseTime),
+				ProviderResponse: rawResponse,
+				Environment:      sPurchase.environment,
+			},
+		}
+
+		return &api.ValidatePurchaseResponse{ValidatedPurchases: validatedPurchases}, nil
+	}
+
+	purchases, err := upsertPurchases(ctx, db, []*storagePurchase{sPurchase})
+	if err != nil {
+		if err != context.Canceled {
+			logger.Error("Error storing Facebook Instant receipt", zap.Error(err))
+		}
+		return nil, err
+	}
+
+	validatedPurchases := make([]*api.ValidatedPurchase, 0, len(purchases))
+	for _, p := range purchases {
+		suid := p.userID.String()
+		if p.userID.IsNil() {
+			suid = ""
+		}
+		validatedPurchases = append(validatedPurchases, &api.ValidatedPurchase{
+			UserId:           suid,
+			ProductId:        p.productId,
+			TransactionId:    p.transactionId,
+			Store:            p.store,
+			PurchaseTime:     timestamppb.New(p.purchaseTime),
+			CreateTime:       timestamppb.New(p.createTime),
+			UpdateTime:       timestamppb.New(p.updateTime),
+			ProviderResponse: rawResponse,
 			SeenBefore:       p.seenBefore,
 			Environment:      p.environment,
 		})
@@ -558,10 +656,17 @@ func upsertPurchases(ctx context.Context, db *sql.DB, purchases []*storagePurcha
 		return nil, errors.New("expects at least one receipt")
 	}
 
-	statements := make([]string, 0, len(purchases))
-	params := make([]interface{}, 0, len(purchases)*8)
 	transactionIDsToPurchase := make(map[string]*storagePurchase)
-	offset := 0
+
+	userIdParams := make([]uuid.UUID, 0, len(purchases))
+	storeParams := make([]api.StoreProvider, 0, len(purchases))
+	transactionIdParams := make([]string, 0, len(purchases))
+	productIdParams := make([]string, 0, len(purchases))
+	purchaseTimeParams := make([]time.Time, 0, len(purchases))
+	rawResponseParams := make([]string, 0, len(purchases))
+	environmentParams := make([]api.StoreEnvironment, 0, len(purchases))
+	refundTimeParams := make([]time.Time, 0, len(purchases))
+
 	for _, purchase := range purchases {
 		if purchase.refundTime.IsZero() {
 			purchase.refundTime = time.Unix(0, 0)
@@ -569,34 +674,35 @@ func upsertPurchases(ctx context.Context, db *sql.DB, purchases []*storagePurcha
 		if purchase.rawResponse == "" {
 			purchase.rawResponse = "{}"
 		}
-
-		statement := fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)", offset+1, offset+2, offset+3, offset+4, offset+5, offset+6, offset+7, offset+8)
-		offset += 8
-		statements = append(statements, statement)
-		params = append(params, purchase.userID, purchase.store, purchase.transactionId, purchase.productId, purchase.purchaseTime, purchase.rawResponse, purchase.environment, purchase.refundTime)
 		transactionIDsToPurchase[purchase.transactionId] = purchase
+
+		userIdParams = append(userIdParams, purchase.userID)
+		storeParams = append(storeParams, purchase.store)
+		transactionIdParams = append(transactionIdParams, purchase.transactionId)
+		productIdParams = append(productIdParams, purchase.productId)
+		purchaseTimeParams = append(purchaseTimeParams, purchase.purchaseTime)
+		rawResponseParams = append(rawResponseParams, purchase.rawResponse)
+		environmentParams = append(environmentParams, purchase.environment)
+		refundTimeParams = append(refundTimeParams, purchase.refundTime)
 	}
 
 	query := `
-INSERT
-INTO
-    purchase
-        (
-            user_id,
-            store,
-            transaction_id,
-            product_id,
-            purchase_time,
-            raw_response,
-            environment,
-						refund_time
-        )
-VALUES
-    ` + strings.Join(statements, ", ") + `
+INSERT INTO purchase
+    (
+        user_id,
+        store,
+        transaction_id,
+        product_id,
+        purchase_time,
+        raw_response,
+        environment,
+        refund_time
+    )
+SELECT unnest($1::uuid[]), unnest($2::smallint[]), unnest($3::text[]), unnest($4::text[]), unnest($5::timestamptz[]), unnest($6::jsonb[]), unnest($7::smallint[]), unnest($8::timestamptz[])
 ON CONFLICT
     (transaction_id)
 DO UPDATE SET
-    refund_time = $8,
+    refund_time = EXCLUDED.refund_time,
     update_time = now()
 RETURNING
 		user_id,
@@ -605,7 +711,8 @@ RETURNING
     update_time,
     refund_time
 `
-	rows, err := db.QueryContext(ctx, query, params...)
+
+	rows, err := db.QueryContext(ctx, query, userIdParams, storeParams, transactionIdParams, productIdParams, purchaseTimeParams, rawResponseParams, environmentParams, refundTimeParams)
 	if err != nil {
 		return nil, err
 	}

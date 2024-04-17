@@ -235,7 +235,7 @@ func NewClient(logger *zap.Logger, timeout time.Duration, googleCnf *oauth2.Conf
 func (c *Client) GetFacebookProfile(ctx context.Context, accessToken string) (*FacebookProfile, error) {
 	c.logger.Debug("Getting Facebook profile", zap.String("token", accessToken))
 
-	path := "https://graph.facebook.com/v11.0/me?access_token=" + url.QueryEscape(accessToken) +
+	path := "https://graph.facebook.com/v18.0/me?access_token=" + url.QueryEscape(accessToken) +
 		"&fields=" + url.QueryEscape("id,name,email,picture")
 	var profile FacebookProfile
 	err := c.request(ctx, "facebook profile", path, nil, &profile)
@@ -254,7 +254,7 @@ func (c *Client) GetFacebookFriends(ctx context.Context, accessToken string) ([]
 	after := ""
 	for {
 		// In FB Graph API 2.0+ this only returns friends that also use the same app.
-		path := "https://graph.facebook.com/v11.0/me/friends?access_token=" + url.QueryEscape(accessToken)
+		path := "https://graph.facebook.com/v18.0/me/friends?access_token=" + url.QueryEscape(accessToken)
 		if after != "" {
 			path += "&after=" + after
 		}
@@ -450,6 +450,11 @@ func (c *Client) CheckGoogleToken(ctx context.Context, idToken string) (GooglePr
 		return &profile, nil
 	}
 
+	if err != nil {
+		// JWT token validation failed and fallback to new flow didn't yield a result
+		return nil, errors.New("google id token invalid")
+	}
+
 	claims := token.Claims.(jwt.MapClaims)
 	profile := &JWTGoogleProfile{}
 	if v, ok := claims["iss"]; ok {
@@ -626,12 +631,15 @@ func (c *Client) GetSteamProfile(ctx context.Context, publisherKey string, appID
 	var profileWrapper SteamProfileWrapper
 	err := c.request(ctx, "steam profile", path, nil, &profileWrapper)
 	if err != nil {
+		c.logger.Debug("Error requesting Steam profile", zap.Error(err))
 		return nil, err
 	}
 	if profileWrapper.Response.Error != nil {
+		c.logger.Debug("Error returned from Steam after requesting Steam profile", zap.String("errorDescription", profileWrapper.Response.Error.ErrorDesc), zap.Int("errorCode", profileWrapper.Response.Error.ErrorCode))
 		return nil, fmt.Errorf("%v, %v", profileWrapper.Response.Error.ErrorDesc, profileWrapper.Response.Error.ErrorCode)
 	}
 	if profileWrapper.Response.Params == nil {
+		c.logger.Debug("No profile returned from Steam after requesting Steam profile")
 		return nil, errors.New("no steam profile")
 	}
 	return profileWrapper.Response.Params, nil
